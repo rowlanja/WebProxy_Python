@@ -1,5 +1,14 @@
-import socket, sys, os
+import socket, sys, os, time
+from cachetools import Cache, TTLCache
 from _thread import *
+
+class TTLItemCache(TTLCache):
+    def __setitem__(self, key, value, cache_setitem=Cache.__setitem__, ttl=None):
+        super(TTLItemCache, self).__setitem__(key, value)
+        if ttl:
+            link = self._TTLCache__links.get(key, None)
+            if link:
+                link.expire += ttl - self.ttl
 
 try:
     this_port = input("[*] Enter the listening port: ")
@@ -10,7 +19,9 @@ except KeyboardInterrupt:
     sys.exit()
 
 max_conn = 5 #Maximum connections queues
-buffer_size = 8192 #Maximum socket's buffer size
+buffer_size = 40000 #Maximum socket's buffer size
+cache = TTLItemCache(maxsize=30,ttl=99000)
+listOfConnections = []
 
 def start():    #Main Program
     try:
@@ -25,10 +36,9 @@ def start():    #Main Program
         sys.exit(2)
 
     while 1:
-        print("looping")
         conn, addr = s.accept() #Accept connection from client browser
         try:
-            print("trying")
+            listOfConnections.append(conn)
             data = conn.recv(buffer_size) #Recieve client data
             start_new_thread(conn_string, (conn,data, addr)) #Starting a thread
         except KeyboardInterrupt:
@@ -36,20 +46,20 @@ def start():    #Main Program
             print("\n[*] Proxy server shutting down....")
             print("[*] Have a nice day... ")
             sys.exit(1)
-    s.close()
 
 def conn_string(conn, data, addr):
     # try:
-
+    print(data.decode('latin1'))
     first_line = data.decode().split('\n')[0]
+    print("fl : ", first_line)
     url = first_line
     http_pos = url.find("://") #Finding the position of ://
-    
+
     if(http_pos==-1):
         temp=url
     else:
         temp = url[(http_pos+3):]
-    
+
     port_pos = temp.find(":")
     webserver_pos = temp.find("/")
     if webserver_pos == -1:
@@ -63,60 +73,88 @@ def conn_string(conn, data, addr):
         port = int((temp[(port_pos+1):])[:webserver_pos-port_pos-1])
         webserver = temp[:port_pos]
     webserver =  webserver.strip('HTTP')
-    
+
     get = str('GET '+temp.replace(webserver,'')+'\n')
     host = 'Host:'+webserver+'\n\n'
     dataPackage = ((get+host).encode())
-    print(" conn : ", conn,
-        "\n data : ", data,
-        "\n addr : ", addr,
-        "\n fl : ", first_line,
-        "\n temp : ", temp,
-        "\n port pos : " , port,
-        "\n webserver : " , webserver,
-        "\n decoded : ", first_line.encode(),
-        "\n GET text : ", get,
-        "\n Combined : ", dataPackage,
-        "\n HOST text : ", host
-    )
-    print("creating proxy sevrer \n")
-    proxy_server(webserver, port, conn, first_line, dataPackage)
+    # print(" conn : ", conn,
+    #     "\n data : ", data,
+    #     "\n addr : ", addr,
+    #     "\n fl : ", first_line,
+    #     "\n temp : ", temp,
+    #     "\n port pos : " , port,
+    #     "\n webserver : " , webserver,
+    #     "\n decoded : ", first_line.encode(),
+    #     "\n GET text : ", get,
+    #     "\n Combined : ", dataPackage,
+    #     "\n HOST text : ", host
+    # )
+    currentRequest = webserver
+    proxy_server(webserver, port, conn, first_line, dataPackage, temp)
     # except Exception as e:
     #     print("exception raised : ", e)
     #     pass
 
-def proxy_server(webserver, port, conn, addr, data):
+def proxy_server(webserver, port, conn, addr, data, temp):
     try:
+        print("Request recieved from endpoint : ", temp )
+
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        print("SOCKET CREATED *********** ")
-        s.connect((webserver, port))
-        print("SOCKET CONNECTED *********** ")
-        s.send(data)
-        print("DATA SENT THROUGH SOCKET *** ")
-        while 1:
-            reply = s.recv(buffer_size)
-            print("RECIEVED REPLY *****  : ", reply)
-            if(len(reply)>0):
-                conn.send(reply)
-                
-                dar = float(len(reply))
-                dar = float(dar/1024)
-                dar = "%.3s" % (str(dar))
-                dar = "%s KB" % (dar)
-                print("[*] Request Done: %s => %s <=" % (str(addr[0]), str(dar)))
 
-            else:
-                break
+        if("usr=mngr" in temp):
+                print("Recieved manager request")
+                managerResp = handleManagerReq()
+                conn.send(managerResp)
+        else :
+            urlResponse = checkCache(temp)
+            if(urlResponse != None):
+                print("Response recieved from cache for : ", temp )
+                conn.send(urlResponse)
+            else :
+                s.connect((webserver, port))
+                s.send(data)
+                while 1:
 
+                    reply = s.recv(buffer_size)
+                    print("Response recieved from endpoint : ", temp )
+
+                    if(reply != b'') :
+                        addCache(temp, reply)
+                    if(len(reply)>0):
+                        conn.send(reply)
+                        dar = float(len(reply))
+                        dar = float(dar/1024)
+                        dar = "%.3s" % (str(dar))
+                        dar = "%s KB" % (dar)
+                        print("[*] Request Done: %s => %s <=" % (str(addr[0]), str(dar)))
+
+                    else:
+                        break
         s.close()
-
         conn.close()
     except socket.error:
         s.close()
         conn.close()
         sys.exit(1)
+    s.close()
+    conn.close()
+
+def checkCache(url):
+    try :
+        urlResponse = cache[url]
+        return urlResponse
+    except KeyError as e:
+        print('URL not cached, retrieving from source : ', url)
 
 
+def addCache(url, reply):
+    print("Adding to cache : ",url)
+    cache.__setitem__(url, reply)
 
-
+def handleManagerReq():
+    httpResponse = []
+    for entry in cache:
+        httpResponse.append(cache[entry])
+    print("returning : ", httpResponse)
+    return httpResponse
 start()
