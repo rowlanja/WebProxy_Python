@@ -19,41 +19,36 @@ except KeyboardInterrupt:
     sys.exit()
 
 max_conn = 5 #Maximum connections queues
-buffer_size = 40000 #Maximum socket's buffer size
+buffer_size = 16000 #Maximum socket's buffer size
 cache = TTLItemCache(maxsize=30,ttl=99000)
-listOfConnections = []
 
 def start():    #Main Program
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM) #Initializing the socket
         s.bind(('', listening_port)) #Binding the socket to listen at the port
         s.listen(max_conn) #Start listening for connections
-        print("[*] Initializing sockets........ Done!")
-        print("[*] Sockets bound successfully......")
-        print("[*] Server started successfully [ %d ]\n" %(listening_port))
     except Exception: #Will be executed if anything fails
-        print("[*] Unable to Initialize Socket")
         sys.exit(2)
+    threadID = 0
 
     while 1:
         conn, addr = s.accept() #Accept connection from client browser
         try:
-            listOfConnections.append(conn)
             data = conn.recv(buffer_size) #Recieve client data
-            start_new_thread(conn_string, (conn,data, addr)) #Starting a thread
+            req = data.decode().split('\n')[0]
+            if not "favicon" in req :
+                start_new_thread(conn_string, (conn,data, addr, threadID)) #Starting a thread
+                threadID += 1
         except KeyboardInterrupt:
             s.close()
             print("\n[*] Proxy server shutting down....")
             print("[*] Have a nice day... ")
             sys.exit(1)
 
-def conn_string(conn, data, addr):
-    # try:
-    print(data.decode('latin1'))
+def conn_string(conn, data, addr, threadID):
     first_line = data.decode().split('\n')[0]
-    print("fl : ", first_line)
     url = first_line
-    http_pos = url.find("://") #Finding the position of ://
+    http_pos = url.find("://")
 
     if(http_pos==-1):
         temp=url
@@ -77,84 +72,79 @@ def conn_string(conn, data, addr):
     get = str('GET '+temp.replace(webserver,'')+'\n')
     host = 'Host:'+webserver+'\n\n'
     dataPackage = ((get+host).encode())
-    # print(" conn : ", conn,
-    #     "\n data : ", data,
-    #     "\n addr : ", addr,
-    #     "\n fl : ", first_line,
-    #     "\n temp : ", temp,
-    #     "\n port pos : " , port,
-    #     "\n webserver : " , webserver,
-    #     "\n decoded : ", first_line.encode(),
-    #     "\n GET text : ", get,
-    #     "\n Combined : ", dataPackage,
-    #     "\n HOST text : ", host
+    print("[*] threadID : ", threadID)
+    # print(
+    #      "\n data : ", data,
+    #      "\n addr : ", addr,
+    #      "\n fl : ", first_line,
+    #      "\n temp : ", temp,
+    #      "\n port pos : " , port,
+    #      "\n webserver : " , webserver,
+    #      "\n decoded : ", first_line.encode(),
+    #      "\n GET text : ", get,
+    #      "\n Combined : ", dataPackage,
+    #      "\n HOST text : ", host
     # )
-    currentRequest = webserver
     proxy_server(webserver, port, conn, first_line, dataPackage, temp)
-    # except Exception as e:
-    #     print("exception raised : ", e)
-    #     pass
+
 
 def proxy_server(webserver, port, conn, addr, data, temp):
+    fullReply = bytearray()
     try:
-        print("Request recieved from endpoint : ", temp )
-
+        print("[*] Request recieved from endpoint : " , temp)
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-        if("usr=mngr" in temp):
-                print("Recieved manager request")
-                managerResp = handleManagerReq()
-                conn.send(managerResp)
-        else :
-            urlResponse = checkCache(temp)
-            if(urlResponse != None):
-                print("Response recieved from cache for : ", temp )
-                conn.send(urlResponse)
-            else :
-                s.connect((webserver, port))
-                s.send(data)
-                while 1:
-
-                    reply = s.recv(buffer_size)
-                    print("Response recieved from endpoint : ", temp )
-
-                    if(reply != b'') :
-                        addCache(temp, reply)
-                    if(len(reply)>0):
-                        conn.send(reply)
-                        dar = float(len(reply))
-                        dar = float(dar/1024)
-                        dar = "%.3s" % (str(dar))
-                        dar = "%s KB" % (dar)
-                        print("[*] Request Done: %s => %s <=" % (str(addr[0]), str(dar)))
-
-                    else:
-                        break
-        s.close()
-        conn.close()
+        urlResponse = checkCache(temp)
+        if(urlResponse != None):
+            conn.send(urlResponse)
+            dar = float(len(urlResponse))
+            dar = float(dar/1024)
+            dar = "%.3s" % (str(dar))
+            dar = "%s KB" % (dar)
+            print("[*] Request relayed to client : => %s <=" % (str(dar)))
+            print("----------- SENDING CACHED RESPONSE FINISHED -------------")
+        else:
+            s.connect((webserver, port))
+            s.send(data)
+            while 1:
+                reply = s.recv(buffer_size)
+                if(len(reply)>0):
+                    conn.sendall(reply)
+                    fullReply += reply
+                    dar = float(len(reply))
+                    dar = float(dar/1024)
+                    dar = "%.3s" % (str(dar))
+                    dar = "%s KB" % (dar)
+                    print("[*] Request relayed to client : => %s <=" % (str(dar)))
+                else:
+                    break
+                print("[*] Cached " + temp + " : " + fullReply.decode())
+                addCache(temp, fullReply)
     except socket.error:
         s.close()
         conn.close()
         sys.exit(1)
     s.close()
     conn.close()
+    time.sleep(20)
 
 def checkCache(url):
     try :
         urlResponse = cache[url]
+        print("[*] Found in cache : ", url)
         return urlResponse
     except KeyError as e:
-        print('URL not cached, retrieving from source : ', url)
+        print('[*] URL not cached, retrieving from source : ', url)
 
 
 def addCache(url, reply):
-    print("Adding to cache : ",url)
+    print("[*] Adding URL to cache : ",url)
     cache.__setitem__(url, reply)
 
 def handleManagerReq():
+
+
     httpResponse = []
     for entry in cache:
         httpResponse.append(cache[entry])
-    print("returning : ", httpResponse)
     return httpResponse
 start()
