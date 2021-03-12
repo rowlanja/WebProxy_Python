@@ -1,4 +1,4 @@
-import socket, sys, os, time, json, time
+import socket, sys, os, time, json, time, ssl
 from cachetools import Cache, TTLCache
 from _thread import *
 
@@ -74,12 +74,29 @@ def conn_string(conn, data, addr, threadID, startTime):
         port = int((temp[(port_pos+1):])[:webserver_pos-port_pos-1])
         webserver = temp[:port_pos]
     webserver =  webserver.strip('HTTP')
-    get = str('GET '+temp.replace(webserver,'')+'\n')
-    host = 'Host:'+webserver+'\n\n'
-    dataPackage = ((get+host).encode())
+    if "/http:/" in first_line :
+        get = str('GET '+temp.replace(webserver,'')+'\n')
+        host = 'Host: '+webserver+'\n\n'
+        dataPackage = ((get+host).encode())
+    else :
+        get = str('GET '+temp.replace(webserver,'')+'\n')
+        host = 'Host: '+webserver[4:]
+        dataPackage = (get+host+"\r\nConnection: close\r\n\r\n").encode()
+        print("dp : ", dataPackage)
     fullURL = temp.replace('/ HTTP/1.1', '').strip()  # remove HTTP version from URL
+    # print("the bitch says : \n",
+    # "fullurl : ", fullURL,
+    # "get : ", get,
+    # "temp : ", temp,
+    # "url  : ", url,
+    # "ws : ", webserver,
+    # "get : ", get,
+    # "host : ", host,
+    # "first : ", first_line
+    # )
+
     if fullURL not in blacklist:
-        proxy_server(webserver, port, conn, first_line, dataPackage, fullURL, threadID, startTime)
+        proxy_server(webserver, port, conn, first_line, dataPackage, first_line, threadID, startTime)
     else :
         print("[*] Request rejected, blacklisted URL")
         while True:
@@ -95,10 +112,9 @@ def proxy_server(webserver, port, conn, addr, data, temp, threadID, startTime):
     timeDifference = 0.0
     try:
         print("[*] Request recieved from endpoint : " , webserver, " handled by thread : ", threadID)
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(1)
+        s= socket.socket(socket.AF_INET, socket.SOCK_STREAM);
         urlResponse = checkCache(temp)
-        if(urlResponse != None):
+        if(urlResponse != None):        # CHECK IF THE URL IS CACHED BEFORE CONSIDERING FETCHING IT
             conn.send(urlResponse)
             dar = float(len(urlResponse))
             dar = float(dar/1024)
@@ -107,19 +123,54 @@ def proxy_server(webserver, port, conn, addr, data, temp, threadID, startTime):
             print("[*] Saved bandwidth : => %s <=" % (str(dar)))
             print("[*] Request Processed in : => %s seconds <= " % (str(time.time()-startTime)))
             print("----------- SENDING CACHED RESPONSE FINISHED -------------\n\n")
-        else:
-            s.connect((webserver, port))
-            s.send(data)
-            while 1:
-                reply = s.recv(buffer_size)
-                if(len(reply)>0):
-                    conn.sendall(reply)
-                    fullReply += reply
-                    timeDifference = (time.time()-startTime)
-                else:
-                    break
+        else :
+            if "/https:" in temp :
+                print("[*] opening socket on SSL port 443")
+                context = ssl.SSLContext();
+                context.verify_mode     = ssl.CERT_REQUIRED;
+                context.check_hostname  = True;
+                context.load_default_certs();
+                webserver = webserver[4:]
+                print("webserver : ", webserver, ' data : ', data)
+                s.connect((webserver, 443));                 # Connect to host
+                # s = ssl.wrap_socket(s, keyfile=None, certfile=None, server_side=False, cert_reqs=ssl.CERT_NONE, ssl_version=ssl.PROTOCOL_TLSv1)
+                # s.sendall(b'GET / HTTP/1.1\r\nHost: github.com\r\nConnection: close\r\n\r\n')
 
-    except (BlockingIOError, socket.timeout, OSError):
+                # s.connect(('github.com', 443))
+                s = ssl.wrap_socket(s, keyfile=None, certfile=None, server_side=False, cert_reqs=ssl.CERT_NONE, ssl_version=ssl.PROTOCOL_SSLv23)
+                s.sendall(data)
+
+                while True:
+                    new = s.recv(buffer_size)
+                    if(len(new)>0):
+                        fullReply += new
+                        timeDifference = (time.time()-startTime)
+                        conn.sendall(new)
+                    else:
+                      break
+                dar = float(len(fullReply))
+                dar = float(dar/1024)
+                dar = "%.3s" % (str(dar))
+                dar = "%s KB" % (dar)
+                print("[*] Request relayed to client : => %s <=" % (str(dar)))
+                print("[*] Request Processed in : => %s seconds <=" % timeDifference)
+                print("----------- SENDING FETCHED RESPONSE FINISHED -------------\n\n")
+                addCache(temp, fullReply)
+            else :
+                print("http")
+                s.settimeout(2)
+                s.connect((webserver, port))
+                s.send(data)
+                while 1:
+                    reply = s.recv(buffer_size)
+                    if(len(reply)>0):
+                        conn.sendall(reply)
+                        fullReply += reply
+                        timeDifference = (time.time()-startTime)
+                    else:
+                        break
+
+    except (BlockingIOError, socket.timeout, OSError, ssl.SSLError):
         print("[*] Caching " + temp)
         addCache(temp, fullReply)
         dar = float(len(fullReply))
@@ -135,6 +186,8 @@ def proxy_server(webserver, port, conn, addr, data, temp, threadID, startTime):
         s.close()
         conn.close()
         sys.exit(1)
+    except Exception as e:
+        print("Undiagnosed error : ", e)
     s.close()
     conn.close()
 

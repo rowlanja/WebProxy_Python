@@ -1,9 +1,15 @@
-context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-context.load_cert_chain('/path/to/certchain.pem', '/path/to/private.key')
+import ssl
+import socket
 
-with socket.socket(socket.AF_INET, socket.SOCK_STREAM, 0) as sock:
-    sock.bind(('127.0.0.1', 8443))
-    sock.listen(5)
-    with context.wrap_socket(sock, server_side=True) as ssock:
-        conn, addr = ssock.accept()
-        data = conn.recv(buffer_size) #Recieve client data
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.connect(('github.com', 443))
+s = ssl.wrap_socket(s, keyfile=None, certfile=None, server_side=False, cert_reqs=ssl.CERT_NONE, ssl_version=ssl.PROTOCOL_SSLv23)
+s.sendall(b'GET / HTTP/1.1\r\nHost: github.com\r\nConnection: close\r\n\r\n')
+
+while True:
+
+    new = s.recv(4096)
+    if not new:
+      s.close()
+      break
+    print(new)
