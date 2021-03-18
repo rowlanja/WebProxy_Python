@@ -4,18 +4,17 @@ import os, time, ssl
 
 
 #resp = req.get("http://localhost:8083/http://www.example.com/")
-#resp = req.get("http://localhost:8081/https://www.example.com/")
-#print(resp.text)
+# resp = requests.get("http://localhost:8081/http://www.columbia.edu/~fdc/sample.html")
+# print(resp.text)
 
-url = 'http://localhost:8084'
+url = 'http://localhost:8081'
 payload = {
             'user'  : 'manager',
             'pswrd' : 'manager',
             'func'  : 'blklst',
-            'url'   : 'www.example.com'
+            'url'   : 'www.example.com/'
 }
 headers = {'content-type': 'application/json'}
-
 r = requests.post(url, data=json.dumps(payload), headers=headers)
-# resp = req.get("http://localhost:8081/usr=mngr&pswrd=mngr")
-print(resp.text)
+# resp = requests.get("https://localhost:443/http://www.columbia.edu/~fdc/sample.html")
+# print(resp.text)

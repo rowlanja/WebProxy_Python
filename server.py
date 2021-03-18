@@ -22,27 +22,47 @@ max_conn = 5 #Maximum connections queues
 buffer_size = 16000 #Maximum socket's buffer size
 cache = TTLItemCache(maxsize=30,ttl=99000) #Initializing my TTL cache
 blacklist = []  # Intializing my blacklisted URLS
+ssl_version = None
+certfile = "./ssl/certificate.pem"
+keyfile = "./ssl/key.pem"
+ciphers = None
+option_test_switch = 0 # to test, change to 1
+checker = "favicon"
+version_dict = {
+    "tlsv1.0" : ssl.PROTOCOL_TLSv1,
+    "tlsv1.1" : ssl.PROTOCOL_TLSv1_1,
+    "tlsv1.2" : ssl.PROTOCOL_TLSv1_2,
+    "sslv23"  : ssl.PROTOCOL_SSLv23,
+    "sslv3"   : ssl.PROTOCOL_SSLv23,
+}
 
-def start():    #Main Program
+def start():    # Main Program
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM) #Initializing the socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM) # Initializing the socket
         s.bind(('', listening_port)) #Binding the socket to listen at the port
         s.listen(max_conn) #Start listening for connections
     except Exception: #Will be executed if anything fails
         sys.exit(2)
 
     threadID = 0
+    if (sys.argv[1] == 'https'):
+        print("[$] socket wrap as ssl socket \n")
+    elif (sys.argv[1] == 'http'):
+        print("[$] no socket wrap needed \n")
     while 1:
         conn, addr = s.accept() #Accept connection from client browser
+        if (sys.argv[1] == 'https'):
+            conn = ssl_wrap_socket(conn, ssl_version, keyfile, certfile, ciphers)   # convert socket to ssl socket
         try:
             data = conn.recv(buffer_size) #Recieve client data
+            # print("data : ", data.decode())
             decodeData = data.decode().split('\n')
             req = decodeData[0]
             if '"user": "manager", "pswrd": "manager"' in data.decode() : #IF WE RECIEVE A PROXY MANAGEMENT REQUEST
                 start_new_thread(handleManagerReq, (decodeData,threadID))
                 threadID += 1
             else :
-                if not "favicon" in req :   #IF WE RECIEVE A NORMAL REQUEST
+                if not checker in req :   #IF WE RECIEVE A NORMAL REQUEST
                     start_new_thread(conn_string, (conn,data, addr, threadID, time.time()))
                     threadID += 1
         except KeyboardInterrupt:
@@ -83,18 +103,7 @@ def conn_string(conn, data, addr, threadID, startTime):
         host = 'Host: '+webserver[4:]
         dataPackage = (get+host+"\r\nConnection: close\r\n\r\n").encode()
         print("dp : ", dataPackage)
-    fullURL = temp.replace('/ HTTP/1.1', '').strip()  # remove HTTP version from URL
-    # print("the bitch says : \n",
-    # "fullurl : ", fullURL,
-    # "get : ", get,
-    # "temp : ", temp,
-    # "url  : ", url,
-    # "ws : ", webserver,
-    # "get : ", get,
-    # "host : ", host,
-    # "first : ", first_line
-    # )
-
+    fullURL = first_line.replace('GET /http://', '').replace(' HTTP/1.1', '').strip()
     if fullURL not in blacklist:
         proxy_server(webserver, port, conn, first_line, dataPackage, first_line, threadID, startTime)
     else :
@@ -113,51 +122,45 @@ def proxy_server(webserver, port, conn, addr, data, temp, threadID, startTime):
     try:
         print("[*] Request recieved from endpoint : " , webserver, " handled by thread : ", threadID)
         s= socket.socket(socket.AF_INET, socket.SOCK_STREAM);
-        urlResponse = checkCache(temp)
-        if(urlResponse != None):        # CHECK IF THE URL IS CACHED BEFORE CONSIDERING FETCHING IT
-            conn.send(urlResponse)
-            dar = float(len(urlResponse))
+        if "/https:" in temp :
+            print("[*] opening socket on SSL port 443")
+            context = ssl.SSLContext();                     # context help manage settings and certificates
+            context.verify_mode     = ssl.CERT_REQUIRED;    # context help manage settings and certificates
+            context.check_hostname  = True;                 # context help manage settings and certificates
+            context.load_default_certs();                   # context help manage settings and certificates
+            webserver = webserver[4:]                       # webserver doesnt need 'www.'
+            s.connect((webserver, 443));                    # Connect to host
+            s = ssl.wrap_socket(s, keyfile=None, certfile=None, server_side=False, cert_reqs=ssl.CERT_NONE, ssl_version=ssl.PROTOCOL_SSLv23)
+            s.sendall(data)                                 # forward request to endpoint
+
+            while True:                             # Streaming back bytes
+                new = s.recv(buffer_size)           #
+                if(len(new)>0):
+                    fullReply += new
+                    timeDifference = (time.time()-startTime)
+                    conn.sendall(new)
+                else:
+                  break
+            dar = float(len(fullReply))
             dar = float(dar/1024)
             dar = "%.3s" % (str(dar))
             dar = "%s KB" % (dar)
-            print("[*] Saved bandwidth : => %s <=" % (str(dar)))
-            print("[*] Request Processed in : => %s seconds <= " % (str(time.time()-startTime)))
-            print("----------- SENDING CACHED RESPONSE FINISHED -------------\n\n")
+            print("[*] Request relayed to client : => %s <=" % (str(dar)))
+            print("[*] Request Processed in : => %s seconds <=" % timeDifference)
+            print("----------- SENDING FETCHED RESPONSE FINISHED & NOT CACHING -------------\n\n")
         else :
-            if "/https:" in temp :
-                print("[*] opening socket on SSL port 443")
-                context = ssl.SSLContext();
-                context.verify_mode     = ssl.CERT_REQUIRED;
-                context.check_hostname  = True;
-                context.load_default_certs();
-                webserver = webserver[4:]
-                print("webserver : ", webserver, ' data : ', data)
-                s.connect((webserver, 443));                 # Connect to host
-                # s = ssl.wrap_socket(s, keyfile=None, certfile=None, server_side=False, cert_reqs=ssl.CERT_NONE, ssl_version=ssl.PROTOCOL_TLSv1)
-                # s.sendall(b'GET / HTTP/1.1\r\nHost: github.com\r\nConnection: close\r\n\r\n')
-
-                # s.connect(('github.com', 443))
-                s = ssl.wrap_socket(s, keyfile=None, certfile=None, server_side=False, cert_reqs=ssl.CERT_NONE, ssl_version=ssl.PROTOCOL_SSLv23)
-                s.sendall(data)
-
-                while True:
-                    new = s.recv(buffer_size)
-                    if(len(new)>0):
-                        fullReply += new
-                        timeDifference = (time.time()-startTime)
-                        conn.sendall(new)
-                    else:
-                      break
-                dar = float(len(fullReply))
+            # "http request recieved "
+            urlResponse = checkCache(temp)
+            if(urlResponse != None):                        # CHECK IF THE URL IS CACHED BEFORE CONSIDERING FETCHING IT
+                conn.send(urlResponse)
+                dar = float(len(urlResponse))
                 dar = float(dar/1024)
                 dar = "%.3s" % (str(dar))
                 dar = "%s KB" % (dar)
-                print("[*] Request relayed to client : => %s <=" % (str(dar)))
-                print("[*] Request Processed in : => %s seconds <=" % timeDifference)
-                print("----------- SENDING FETCHED RESPONSE FINISHED -------------\n\n")
-                addCache(temp, fullReply)
+                print("[*] Saved bandwidth : => %s <=" % (str(dar)))
+                print("[*] Request Processed in : => %s seconds <= " % (str(time.time()-startTime)))
+                print("----------- SENDING CACHED RESPONSE FINISHED -------------\n\n")
             else :
-                print("http")
                 s.settimeout(2)
                 s.connect((webserver, port))
                 s.send(data)
@@ -219,6 +222,34 @@ def handleManagerReq(req, threadID):
     if json_payload["func"] == "usrBan":
         blacklist.remove(json_payload["url"])
         print('[*] blacklist updated, REMOVED : ', json_payload["url"])
+
+def ssl_wrap_socket(sock, ssl_version=None, keyfile=None, certfile=None, ciphers=None):
+
+    #1. init a context with given version(if any)
+    if ssl_version is not None and ssl_version in version_dict:
+        #create a new SSL context with specified TLS version
+        sslContext = ssl.SSLContext(version_dict[ssl_version])
+        if option_test_switch == 1:
+            print("ssl_version loaded!! =", ssl_version)
+    else:
+        #if not specified, default
+        sslContext = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+
+    if ciphers is not None:
+        #if specified, set certain ciphersuite
+        sslContext.set_ciphers(ciphers)
+        if option_test_switch == 1:
+            print("ciphers loaded!! =", ciphers)
+
+    #server-side must load certfile and keyfile, so no if-else
+    sslContext.load_cert_chain(certfile, keyfile)
+    print("ssl loaded!! certfile=", certfile, "keyfile=", keyfile)
+
+    try:
+        return sslContext.wrap_socket(sock, server_side = True)
+    except ssl.SSLError as e:
+        print("wrap socket failed!")
+        print(traceback.format_exc())
 
 blacklistHTML = """
     <!doctype html>
